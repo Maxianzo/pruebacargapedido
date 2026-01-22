@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Presupuesto</title>
+
+<style>
+body { font-family: Arial; text-transform: uppercase; }
+section { margin: 20px auto; max-width: 900px; }
+h2 { background:#f0f00a; padding:10px; border-radius:20px; text-align:center; }
+
+.panel,.pedido{
+    padding:20px;
+    border-radius:30px;
+    box-shadow:5px 5px 10px #000;
+    border:3px inset #000;
+}
+#listaClientes{
+    border:2px solid #000;
+    border-radius:15px;
+    max-height:150px;
+    overflow-y:auto;
+    display:none;
+    background:#fff;
+    position:relative;
+    z-index:1000;
+}
+
+#listaClientes div{
+    padding:10px;
+    cursor:pointer;
+    border-bottom:1px solid #ccc;
+}
+
+#listaClientes div:hover{
+    background:#f0f00a;
+}
+
+.item{
+    display:flex;
+    justify-content:space-between;
+    margin-bottom:8px;
+}
+
+.item input, textarea{
+    width:60%;
+    text-align:center;
+    border-radius:20px;
+    padding:6px;
+}
+
+input[type="search"], input[type="text"]{
+    width:100%;
+    padding:12px;
+    border-radius:20px;
+    border:2px solid #000;
+    margin-bottom:10px;
+}
+
+textarea{
+    width:100%;
+    resize:none;
+}
+
+table{
+    width:100%;
+    border-collapse:collapse;
+    margin-top:15px;
+}
+th,td{ border:1px solid #000; padding:6px; text-align:center; }
+
+button{
+    padding:8px 20px;
+    border-radius:20px;
+    border:2px solid #000;
+    cursor:pointer;
+    margin:5px;
+}
+
+.subtotal{
+    text-align:right;
+    font-weight:bold;
+    margin-top:10px;
+}
+
+@media print{
+    .panel,.acciones,.buscador,.catalogo,.cliente{ display:none; }
+    body{ text-transform:none; }
+    .pedido{ box-shadow:none; border:none; }
+}
+</style>
+</head>
+
+<body>
+<div id="loginBox" style="max-width:400px;margin:80px auto" class="panel">
+    <h2>Ingreso al sistema</h2>
+    <input type="text" id="loginUser" placeholder="Usuario">
+    <input type="password" id="loginPass" placeholder="Contraseña">
+    <button onclick="login()">Ingresar</button>
+</div>
+
+<section class="panel">
+<h2>Configuración de precios</h2>
+<div id="config"></div>
+<button onclick="guardarPrecios()">Guardar precios</button>
+</section>
+
+<section class="pedido">
+<h2>Presupuesto</h2>
+
+<!-- CLIENTE -->
+<div class="cliente">
+    <h3>Datos del cliente</h3>
+    <input type="search" id="clienteNombre" placeholder="Nombre del cliente">
+    <div id="listaClientes"></div>
+
+    <input type="text" id="clienteDireccion" placeholder="Dirección">
+    <textarea id="clienteDescripcion" rows="3" placeholder="Descripción adicional"></textarea>
+</div>
+
+<hr>
+
+<div class="buscador">
+    <input type="search" id="busqueda" placeholder="Buscar producto...">
+</div>
+
+<div class="catalogo" id="catalogo"></div>
+
+<h3>Previsualización del pedido</h3>
+<table id="preview"></table>
+<div class="subtotal" id="subtotal">SUBTOTAL: $0</div>
+
+<div class="acciones">
+<button id="btnCalcular" onclick="previsualizar()">Calcular total</button>
+<button id="btnEnviar" onclick="enviarPedido()" disabled>Enviar pedido</button>
+
+    <button onclick="enviarWhatsApp()">📲 WhatsApp</button>
+    <button onclick="imprimir()">🧾 PDF</button>
+</div>
+
+<table id="tabla"></table>
+<h3 id="total">TOTAL: $0</h3>
+<div id="estadoPedido" style="
+    display:none;
+    margin-top:15px;
+    padding:12px;
+    border-radius:20px;
+    background:#d4edda;
+    color:#155724;
+    font-weight:bold;
+    text-align:center;
+">
+    ✅ PEDIDO ENVIADO
+</div>
+
+</section>
+
+<button style="background:red" onclick="resetear()">Restablecer productos</button>
+<script>
+/* ================= CONFIG EMPRESA ================= */
+const EMPRESA_ID = "presupuesto5_25";
+
+let pedidoConfirmado = false;
+let totalCalculado = 0;
+
+
+/* ================= PRODUCTOS ================= */
+const productosBase = [
+ { nombre: "Pan de pancho", precio: 920 },
+ { nombre: "Pan de hamburguesa", precio: 920 },
+ { nombre: "Prepizza", precio: 1120 },
+ { nombre: "Roscas glaciadas", precio: 10700 },
+ { nombre: "Sandwich de miga grande", precio: 2000 }
+];
+
+const PRECIOS_KEY = `precios_${EMPRESA_ID}`;
+
+function resetear(){
+    if(confirm("¿Seguro que desea restablecer precios?")){
+        localStorage.removeItem(PRECIOS_KEY);
+        location.reload();
+    }
+}
+
+let productos = JSON.parse(localStorage.getItem(PRECIOS_KEY)) || productosBase;
+let pedido = {};
+
+/* ================= ADMIN ================= */
+const config = document.getElementById("config");
+productos.forEach((p,i)=>{
+    config.innerHTML += `
+        <div class="item">
+            <span>${p.nombre}</span>
+            <input type="number" id="precio_${i}" value="${p.precio}">
+        </div>`;
+});
+
+function guardarPrecios(){
+    productos.forEach((p,i)=>{
+        p.precio = +document.getElementById(`precio_${i}`).value || 0;
+    });
+    localStorage.setItem(PRECIOS_KEY,JSON.stringify(productos));
+    alert("Precios guardados");
+}
+
+/* ================= CATALOGO ================= */
+const catalogo = document.getElementById("catalogo");
+
+function renderCatalogo(f=""){
+    catalogo.innerHTML="";
+    productos.forEach((p,i)=>{
+        if(p.nombre.toLowerCase().includes(f.toLowerCase())){
+            catalogo.innerHTML+=`
+                <div class="item">
+                    <span>${p.nombre}</span>
+                    <input type="number" min="1" placeholder="Cant"
+                        onchange="agregar(${i},this.value)">
+                </div>`;
+        }
+    });
+}
+renderCatalogo();
+
+document.getElementById("busqueda")
+.addEventListener("input",e=>renderCatalogo(e.target.value));
+
+/* ================= PEDIDO ================= */
+function agregar(i,cant){
+    pedidoConfirmado = false;
+    document.getElementById("estadoPedido").style.display = "none";
+
+    const btn = document.getElementById("btnCalcular");
+    btn.disabled = false;
+    btn.innerText = "Calcular total";
+    btn.style.opacity = "1";
+
+    cant=parseInt(cant);
+    if(!cant || cant<=0) return;
+
+    if(pedido[i]) pedido[i].cantidad+=cant;
+    else pedido[i]={...productos[i],cantidad:cant};
+
+    renderPreview();
+}
+
+
+function quitar(i){
+    delete pedido[i];
+    renderPreview();
+}
+
+function renderPreview(){
+    let html=`
+        <tr>
+            <th>Producto</th><th>Cant</th><th>Total</th><th></th>
+        </tr>`;
+    let sub=0;
+
+    Object.keys(pedido).forEach(i=>{
+        const p=pedido[i];
+        const t=p.cantidad*p.precio;
+        sub+=t;
+
+        html+=`
+        <tr>
+            <td>${p.nombre}</td>
+            <td>${p.cantidad}</td>
+            <td>$${t}</td>
+            <td><button onclick="quitar(${i})">❌</button></td>
+        </tr>`;
+    });
+pedidoConfirmado = false;
+document.getElementById("estadoPedido").style.display = "none";
+document.getElementById("btnEnviar").disabled = true;
+document.getElementById("btnCalcular").disabled = false;
+
+}
+
+/* ================= CLIENTES (LOCAL DB) ================= */
+const usuario = localStorage.getItem("usuario_logueado");
+const CLIENTES_KEY = `clientes_${EMPRESA_ID}_${usuario}`;
+
+let clientes = JSON.parse(localStorage.getItem(CLIENTES_KEY)) || {};
+
+const nombreInput = document.getElementById("clienteNombre");
+const direccionInput = document.getElementById("clienteDireccion");
+const descripcionInput = document.getElementById("clienteDescripcion");
+const listaClientes = document.getElementById("listaClientes");
+
+nombreInput.addEventListener("input",()=>{
+    const texto = nombreInput.value.toLowerCase().trim();
+    listaClientes.innerHTML = "";
+
+    if(!texto){
+        listaClientes.style.display = "none";
+        return;
+    }
+
+    const coincidencias = Object.keys(clientes)
+        .filter(n => n.toLowerCase().includes(texto));
+
+    if(coincidencias.length === 0){
+        listaClientes.style.display = "none";
+        return;
+    }
+
+    coincidencias.forEach(nombre=>{
+        const div = document.createElement("div");
+        div.innerText = nombre;
+
+        div.onclick = ()=>{
+            nombreInput.value = nombre;
+            direccionInput.value = clientes[nombre].direccion || "";
+            descripcionInput.value = clientes[nombre].descripcion || "";
+            listaClientes.style.display = "none";
+        };
+
+        listaClientes.appendChild(div);
+    });
+
+    listaClientes.style.display = "block";
+});
+
+/* ================= FINAL ================= */
+let textoWhatsApp = "";
+
+function previsualizar(){
+
+    let total = 0;
+    textoWhatsApp = "PRESUPUESTO\n\n";
+
+    const nombre = nombreInput.value.trim() || "Consumidor Final";
+    const direccion = direccionInput.value.trim();
+    const descripcion = descripcionInput.value.trim();
+
+    // guardar cliente
+    clientes[nombre] = { direccion, descripcion };
+    localStorage.setItem(CLIENTES_KEY, JSON.stringify(clientes));
+
+    textoWhatsApp += `CLIENTE: ${nombre}\n`;
+    if(direccion) textoWhatsApp += `DIRECCIÓN: ${direccion}\n`;
+    if(descripcion) textoWhatsApp += `${descripcion}\n`;
+    textoWhatsApp += "\n";
+
+    let html = `
+        <tr>
+            <th>Producto</th><th>Cant</th><th>Precio</th><th>Total</th>
+        </tr>`;
+
+    Object.values(pedido).forEach(p=>{
+        const t = p.cantidad * p.precio;
+        total += t;
+
+        html += `
+        <tr>
+            <td>${p.nombre}</td>
+            <td>${p.cantidad}</td>
+            <td>$${p.precio}</td>
+            <td>$${t}</td>
+        </tr>`;
+
+        textoWhatsApp += `• ${p.nombre} - ${p.cantidad} un - $${t.toLocaleString("es-AR")}\n`;
+    });
+
+    textoWhatsApp += `\nTOTAL: $${total.toLocaleString("es-AR")}`;
+
+    totalCalculado = total;
+
+    document.getElementById("tabla").innerHTML = html;
+    document.getElementById("total").innerText =
+        "TOTAL: $" + total.toLocaleString("es-AR");
+
+    document.getElementById("btnEnviar").disabled = false;
+}
+
+
+  function enviarPedido(){
+
+    if(pedidoConfirmado){
+        alert("Este pedido ya fue enviado");
+        return;
+    }
+
+    if(Object.keys(pedido).length === 0){
+        alert("No hay productos en el pedido");
+        return;
+    }
+
+    const usuarioActual = localStorage.getItem("usuario_logueado");
+    if(!usuarioActual){
+        alert("No hay usuario logueado");
+        return;
+    }
+
+    const PEDIDOS_KEY = `pedidos_${EMPRESA_ID}_${usuarioActual}`;
+    let pedidosGuardados = JSON.parse(localStorage.getItem(PEDIDOS_KEY)) || [];
+
+    const nombre = nombreInput.value.trim() || "Consumidor Final";
+
+    pedidosGuardados.push({
+        presupuesto: EMPRESA_ID,
+        usuario: usuarioActual,
+        fecha: new Date().toLocaleString("es-AR"),
+        cliente: nombre,
+        total: totalCalculado,
+        items: Object.values(pedido).map(p => ({
+            nombre: p.nombre,
+            cantidad: p.cantidad,
+            precio: p.precio
+        }))
+    });
+
+    localStorage.setItem(PEDIDOS_KEY, JSON.stringify(pedidosGuardados));
+
+    pedidoConfirmado = true;
+
+    document.getElementById("estadoPedido").style.display = "block";
+    document.getElementById("btnEnviar").disabled = true;
+    document.getElementById("btnCalcular").disabled = true;
+
+    alert("Pedido enviado y guardado correctamente");
+}
+
+function enviarWhatsApp(){
+    if(!textoWhatsApp) return alert("Calcule el total primero");
+    window.open("https://wa.me/?text="+encodeURIComponent(textoWhatsApp));
+}
+
+function imprimir(){ window.print(); }// ================= GUARDAR PEDIDO =================
+
+function exportarExcel(){
+    const usuario = localStorage.getItem("usuario_logueado");
+    if(!usuario){
+        alert("No hay usuario logueado");
+        return;
+    }
+
+    const PEDIDOS_KEY = `pedidos_${EMPRESA_ID}_${usuario}`;
+    const pedidos = JSON.parse(localStorage.getItem(PEDIDOS_KEY)) || [];
+
+    if(pedidos.length === 0){
+        alert("No hay pedidos guardados");
+        return;
+    }
+
+    let csv = "Empresa,Usuario,Fecha,Cliente,Producto,Cantidad,Precio,Total\n";
+
+    pedidos.forEach(pedido => {
+        pedido.items.forEach(item => {
+            csv += `"${EMPRESA_ID}","${usuario}","${pedido.fecha}","${pedido.cliente}","${item.nombre}",${item.cantidad},${item.precio},${item.cantidad * item.precio}\n`;
+        });
+    });
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pedidos_${EMPRESA_ID}_${usuario}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+
+</script>
+
+
+<script>
+/* ================= USUARIOS ================= */
+const USUARIOS = {
+    admin: { pass: "1234", nombre: "Administrador" },
+    juan:  { pass: "1111", nombre: "Maxi" },
+    ana:   { pass: "2222", nombre: "Ana López" }
+};
+
+const loginBox = document.getElementById("loginBox");
+const sistema = document.querySelectorAll("section");
+
+let usuarioActivo = localStorage.getItem("usuario_logueado");
+
+if (!usuarioActivo) {
+    sistema.forEach(s => s.style.display = "none");
+} else {
+    loginBox.style.display = "none";
+}
+function login(){
+    const u = loginUser.value.trim();
+    const p = loginPass.value.trim();
+
+    if(!USUARIOS[u] || USUARIOS[u].pass !== p){
+        alert("Usuario o contraseña incorrectos");
+        return;
+    }
+
+    localStorage.setItem("usuario_logueado", u);
+    location.reload();
+}function logout(){
+    localStorage.removeItem("usuario_logueado");
+    location.reload();
+}
+
+
+</script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<script>function descargarExcelPedidos(){
+
+    const usuario = localStorage.getItem("usuario_logueado");
+    const PEDIDOS_KEY = `pedidos_${EMPRESA_ID}_${usuario}`;
+    const pedidos = JSON.parse(localStorage.getItem(PEDIDOS_KEY)) || [];
+
+    if(pedidos.length === 0){
+        alert("No hay pedidos guardados");
+        return;
+    }
+
+    let data = [];
+
+    pedidos.forEach(pedido => {
+
+        pedido.items.forEach((item, i) => {
+            data.push({
+                Presupuesto: i === 0 ? EMPRESA_ID : "",
+                Usuario: i === 0 ? usuario : "",
+                Fecha: i === 0 ? pedido.fecha : "",
+                Cliente: i === 0 ? pedido.cliente : "",
+                Producto: item.nombre,
+                Cantidad: item.cantidad,
+                Precio: item.precio,
+                Total: item.cantidad * item.precio
+            });
+        });
+
+        data.push({
+            Presupuesto: "",
+            Usuario: "",
+            Fecha: "",
+            Cliente: "",
+            Producto: "TOTAL PEDIDO",
+            Cantidad: "",
+            Precio: "",
+            Total: pedido.total
+        });
+
+        // 👉 espacio visual entre pedidos
+        data.push({});
+    });
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Pedidos");
+
+    XLSX.writeFile(wb, `pedidos_${EMPRESA_ID}_${usuario}.xlsx`);
+}
+
+</script>
+
+<button onclick="logout()">Salir</button>
+
+
+<button onclick="descargarExcelPedidos()">Descargar Excel</button>
+
+<button onclick="agregarProducto()">Agregar producto</button>
+
+
+
+
+
+
+</body>
+</html>
